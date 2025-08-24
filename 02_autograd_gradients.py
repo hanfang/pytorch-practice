@@ -59,10 +59,10 @@ x = torch.tensor([2.0], requires_grad=True)
 y = x ** 3
 dy_dx = torch.autograd.grad(y, x, create_graph=True)[0]
 print(f"y = x³: {y}")
-print(f"dy/dx: {dy_dx}")  # Should be 3*x² = 12
+print(f"dy/dx: {dy_dx}")  # Should be 3*2² = 12
 
 d2y_dx2 = torch.autograd.grad(dy_dx, x)[0]
-print(f"d²y/dx²: {d2y_dx2}")  # Should be 6*x = 12
+print(f"d²y/dx²: {d2y_dx2}")  # Should be 6*2 = 12
 
 # 6. Gradient flow control
 print("\n6. Gradient Flow Control:")

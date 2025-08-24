@@ -52,8 +52,10 @@ for epoch in range(5):
 # 2. Attention Mechanism
 print("\n2. Attention Mechanism Implementation:")
 class MultiHeadAttention(nn.Module):
-    def __init__(self, d_model, n_heads):
+    def __init__(self, d_model, n_heads, dropout=0.1):
         super().__init__()
+        assert d_model % n_heads == 0
+        
         self.d_model = d_model
         self.n_heads = n_heads
         self.d_k = d_model // n_heads
@@ -62,19 +64,42 @@ class MultiHeadAttention(nn.Module):
         self.W_k = nn.Linear(d_model, d_model)
         self.W_v = nn.Linear(d_model, d_model)
         self.W_o = nn.Linear(d_model, d_model)
+        self.dropout = nn.Dropout(dropout)
         
+        # Initialize weights
+        self._init_weights()
+    
+    def _init_weights(self):
+        for module in [self.W_q, self.W_k, self.W_v, self.W_o]:
+            nn.init.xavier_uniform_(module.weight)
+            nn.init.constant_(module.bias, 0)
+    
+    def create_padding_mask(self, seq, pad_idx=0):
+        """Create padding mask to ignore padded tokens"""
+        return (seq != pad_idx).unsqueeze(1).unsqueeze(2)
+    
+    def create_causal_mask(self, size):
+        """Create causal mask for autoregressive generation"""
+        mask = torch.tril(torch.ones(size, size))
+        return mask.unsqueeze(0).unsqueeze(0)  # Add batch and head dimensions
+    
     def scaled_dot_product_attention(self, Q, K, V, mask=None):
         scores = torch.matmul(Q, K.transpose(-2, -1)) / math.sqrt(self.d_k)
         
         if mask is not None:
-            scores.masked_fill_(mask == 0, -1e9)
+            # Handle both padding masks (True/False) and causal masks (1/0)
+            if mask.dtype == torch.bool:
+                scores.masked_fill_(~mask, float('-inf'))
+            else:
+                scores.masked_fill_(mask == 0, float('-inf'))
         
         attention_weights = F.softmax(scores, dim=-1)
+        attention_weights = self.dropout(attention_weights)
         output = torch.matmul(attention_weights, V)
         
         return output, attention_weights
     
-    def forward(self, query, key, value, mask=None):
+    def forward(self, query, key, value, padding_mask=None, causal_mask=None):
         batch_size, seq_length, d_model = query.size()
         
         # Linear transformations and reshape
@@ -82,8 +107,18 @@ class MultiHeadAttention(nn.Module):
         K = self.W_k(key).view(batch_size, seq_length, self.n_heads, self.d_k).transpose(1, 2)
         V = self.W_v(value).view(batch_size, seq_length, self.n_heads, self.d_k).transpose(1, 2)
         
+        # Combine masks if both are provided
+        combined_mask = None
+        if padding_mask is not None:
+            combined_mask = padding_mask
+        if causal_mask is not None:
+            if combined_mask is not None:
+                combined_mask = combined_mask & causal_mask
+            else:
+                combined_mask = causal_mask
+        
         # Apply attention
-        attention_output, attention_weights = self.scaled_dot_product_attention(Q, K, V, mask)
+        attention_output, attention_weights = self.scaled_dot_product_attention(Q, K, V, combined_mask)
         
         # Concatenate heads
         attention_output = attention_output.transpose(1, 2).contiguous().view(
@@ -94,15 +129,29 @@ class MultiHeadAttention(nn.Module):
         
         return output, attention_weights
 
-# Test attention
+# Test attention with different masking scenarios
 d_model, n_heads, seq_len, batch_size = 512, 8, 10, 2
 attention = MultiHeadAttention(d_model, n_heads)
 
+# Example 1: Self-attention without masks
 x = torch.randn(batch_size, seq_len, d_model)
 output, weights = attention(x, x, x)
+print(f"Basic self-attention - Input: {x.shape}, Output: {output.shape}")
 
-print(f"Input shape: {x.shape}")
-print(f"Output shape: {output.shape}")
+# Example 2: With padding mask (for variable-length sequences)
+seq_tokens = torch.randint(1, 1000, (batch_size, seq_len))  # Token IDs
+padding_mask = attention.create_padding_mask(seq_tokens, pad_idx=0)
+output, weights = attention(x, x, x, padding_mask=padding_mask)
+print(f"With padding mask - Output: {output.shape}")
+
+# Example 3: With causal mask (for autoregressive generation)
+causal_mask = attention.create_causal_mask(seq_len)
+output, weights = attention(x, x, x, causal_mask=causal_mask)
+print(f"With causal mask - Output: {output.shape}")
+
+# Example 4: With both masks (common in decoder self-attention)
+output, weights = attention(x, x, x, padding_mask=padding_mask, causal_mask=causal_mask)
+print(f"With both masks - Output: {output.shape}")
 print(f"Attention weights shape: {weights.shape}")
 
 # 3. Residual Connections and Layer Normalization
